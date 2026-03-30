@@ -21,6 +21,7 @@ import tkinter as tk
 from PIL import Image, ImageDraw
 import network
 import mnist_loader
+import save_load_network
 
 class DigitDrawer:
     def __init__(self, net):
@@ -215,39 +216,49 @@ class DigitDrawer:
 
 
 def train_or_load_network():
-    """Train a new network or load an existing one."""
     print("\n" + "=" * 60)
     print("Neural Network Setup")
     print("=" * 60)
-    num_of_epochs=0
-    choice = input("\n1. Train a new network (3 epochs, ~1 minute)\n"
-                  "2. Train for better accuracy (user selected epochs, ~10 minutes)\n"
-                  "3. Quick test (use partially trained network)\n"
-                  "\nChoice (1/2/3): ").strip()
-    
+
+    print("\n1. Load existing trained network")
+    print("2. Train new network and save it")
+
+    choice = input("\nChoice (1/2): ").strip()
+
+    if choice == '1':
+        filename = input("Enter filename (default: trained_network.pkl): ").strip()
+        if not filename:
+            filename = "trained_network.pkl"
+
+        try:
+            net = save_load_network.load_network(filename)
+            return net
+        except FileNotFoundError:
+            print("No saved network found. Training a new one instead...\n")
+
+    # Train new network
     print("\nLoading MNIST data...")
     training_data, validation_data, test_data = mnist_loader.load_data_wrapper()
-    num_of_epochs = int(input("\nEnter number of epochs: "))
-    print("Creating neural network [784, user selected epochs, 10]...")
-    net = network.Network([784, num_of_epochs, 10])
-    
-    if choice == '2':
-        print(f"\nTraining network for {num_of_epochs} epochs...")
-        print("This will take several minutes. Please wait...")
-        print("-" * 60)
-        net.SGD(training_data, num_of_epochs, 10, 3.0, test_data=test_data)
-        print("-" * 60)
-    elif choice == '3':
-        print("\nQuick test mode - network is untrained!")
-        print("(Predictions will be random)")
-    else:  # Default to 3 epochs
-        print("\nTraining network for 3 epochs...")
-        print("-" * 60)
-        net.SGD(training_data, 3, 10, 3.0, test_data=test_data)
-        print("-" * 60)
-    
-    return net
 
+    epochs = int(input("Enter number of epochs (e.g. 10-30): "))
+
+    print("Creating neural network [784, 30, 10]...")
+    net = network.Network([784, 30, 10])
+
+    print(f"\nTraining for {epochs} epochs...")
+    print("-" * 60)
+    net.SGD(training_data, epochs, 10, 3.0, test_data=test_data)
+    print("-" * 60)
+
+    # Save after training
+    save_choice = input("\nSave this network? (y/n): ").strip().lower()
+    if save_choice == 'y':
+        filename = input("Filename (default: trained_network.pkl): ").strip()
+        if not filename:
+            filename = "trained_network.pkl"
+        save_load_network.save_network(net, filename)
+
+    return net
 
 if __name__ == "__main__":
     print("=" * 60)
