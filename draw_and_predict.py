@@ -143,7 +143,25 @@ class DigitDrawer:
         
         # Normalize to [0, 1]
         img_array = img_array / 255.0
-        
+
+        #Center digit
+        coords = np.argwhere(img_array > 0.2)
+        if coords.size > 0:
+            y_min, x_min = coords.min(axis=0)
+            y_max, x_max = coords.max(axis=0)
+
+            digit = img_array[y_min:y_max + 1, x_min:x_max + 1]
+
+            # Place in center
+            new_img = np.zeros((28, 28))
+            h, w = digit.shape
+
+            y_offset = (28 - h) // 2
+            x_offset = (28 - w) // 2
+
+            new_img[y_offset:y_offset + h, x_offset:x_offset + w] = digit
+            img_array = new_img
+
         # Reshape to (784, 1) for network
         img_vector = img_array.reshape(784, 1)
         
@@ -232,7 +250,7 @@ def train_or_load_network():
 
         try:
             net = save_load_network.load_network(filename)
-            
+
             return net
         except FileNotFoundError:
             print("No saved network found. Training a new one instead...\n")
@@ -243,8 +261,8 @@ def train_or_load_network():
 
     epochs = int(input("Enter number of epochs (e.g. 10-30): "))
 
-    print("Creating neural network [784, 64, 10]...")
-    net = network.Network([784, 64, 10])
+    print("Creating neural network [784, 128, 10]...")
+    net = network.Network([784, 128, 10])
 
     print(f"\nTraining for {epochs} epochs...")
     print("-" * 60)
