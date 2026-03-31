@@ -12,46 +12,51 @@ import mnist_loader
 import os
 
 def save_network(net, filename="trained_network.pkl"):
-    """
-    Save a trained network to a file.
-    
-    Args:
-        net: The Network object to save
-        filename: Name of the file to save to
-    """
+    import mnist_loader
+
+    _, _, test_data = mnist_loader.load_data_wrapper()
+    accuracy = net.evaluate(test_data)
+    total = len(test_data)
+    percentage = (accuracy / total) * 100
+
     data = {
         'sizes': net.sizes,
         'weights': net.weights,
-        'biases': net.biases
+        'biases': net.biases,
+        'accuracy': percentage
     }
-    
+
     with open(filename, 'wb') as f:
         pickle.dump(data, f)
-    
-    print(f"✓ Network saved to '{filename}'")
-    return filename
 
-def load_network(filename="trained_network.pkl"):
-    """
-    Load a trained network from a file.
-    
-    Args:
-        filename: Name of the file to load from
-        
-    Returns:
-        Network object with loaded weights and biases
-    """
+    print(f"✓ Network saved to '{filename}'")
+    print(f"Saved accuracy: {percentage:.2f}%")
+def load_network(filename="trained_network.pkl", show_accuracy=True):
+    import mnist_loader
+
     if not os.path.exists(filename):
         raise FileNotFoundError(f"Network file '{filename}' not found!")
-    
+
     with open(filename, 'rb') as f:
         data = pickle.load(f)
-    
+
     net = network.Network(data['sizes'])
     net.weights = data['weights']
     net.biases = data['biases']
-    
+
     print(f"✓ Network loaded from '{filename}'")
+
+    # NEW: evaluate accuracy
+    if show_accuracy:
+        print("\nEvaluating network...")
+        _, _, test_data = mnist_loader.load_data_wrapper()
+
+        accuracy = net.evaluate(test_data)
+        total = len(test_data)
+        percentage = (accuracy / total) * 100
+
+        print(f"Accuracy: {accuracy} / {total} ({percentage:.2f}%)")
+
     return net
 
 def train_and_save(epochs=30, filename="trained_network.pkl"):

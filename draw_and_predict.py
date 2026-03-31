@@ -242,12 +242,12 @@ def train_or_load_network():
 
     epochs = int(input("Enter number of epochs (e.g. 10-30): "))
 
-    print("Creating neural network [784, 30, 10]...")
-    net = network.Network([784, 30, 10])
+    print("Creating neural network [784, 64, 10]...")
+    net = network.Network([784, 64, 10])
 
     print(f"\nTraining for {epochs} epochs...")
     print("-" * 60)
-    net.SGD(training_data, epochs, 10, 3.0, test_data=test_data)
+    net.SGD(training_data, epochs, 10, 1.0, test_data=test_data)
     print("-" * 60)
 
     # Save after training
