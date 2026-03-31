@@ -46,7 +46,11 @@ def load_network(filename="trained_network.pkl", show_accuracy=True):
 
     print(f"✓ Network loaded from '{filename}'")
 
-    # NEW: evaluate accuracy
+
+    if 'accuracy' in data:
+        print(f"Saved accuracy: {data['accuracy']:.2f}%")
+
+    # Optional: recompute accuracy
     if show_accuracy:
         print("\nEvaluating network...")
         _, _, test_data = mnist_loader.load_data_wrapper()
@@ -55,7 +59,7 @@ def load_network(filename="trained_network.pkl", show_accuracy=True):
         total = len(test_data)
         percentage = (accuracy / total) * 100
 
-        print(f"Accuracy: {accuracy} / {total} ({percentage:.2f}%)")
+        print(f"Current accuracy: {accuracy} / {total} ({percentage:.2f}%)")
 
     return net
 

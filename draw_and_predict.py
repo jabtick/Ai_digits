@@ -232,6 +232,7 @@ def train_or_load_network():
 
         try:
             net = save_load_network.load_network(filename)
+            
             return net
         except FileNotFoundError:
             print("No saved network found. Training a new one instead...\n")
