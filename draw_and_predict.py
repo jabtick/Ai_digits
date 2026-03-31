@@ -16,12 +16,18 @@ This will:
 
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import tkinter as tk
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
+import os
 import network
 import mnist_loader
 import save_load_network
+
+CANVAS_SIZE = 280
+MNIST_IMAGE_SIZE = 28
+TARGET_DIGIT_SIZE = 20
+DRAW_THRESHOLD = 0.10
+LOW_CONFIDENCE_THRESHOLD = 75.0
 
 class DigitDrawer:
     def __init__(self, net):
@@ -30,8 +36,8 @@ class DigitDrawer:
         self.window.title("Draw a Digit (0-9)")
         
         # Create canvas for drawing
-        self.canvas_width = 280
-        self.canvas_height = 280
+        self.canvas_width = CANVAS_SIZE
+        self.canvas_height = CANVAS_SIZE
         self.canvas = tk.Canvas(
             self.window, 
             width=self.canvas_width, 
@@ -42,7 +48,7 @@ class DigitDrawer:
         self.canvas.pack()
         
         # Create image for drawing
-        self.image = Image.new('L', (280, 280), 'white')
+        self.image = Image.new('L', (CANVAS_SIZE, CANVAS_SIZE), 'white')
         self.draw = ImageDraw.Draw(self.image)
         
         # Bind mouse events
@@ -123,48 +129,89 @@ class DigitDrawer:
     def clear(self):
         """Clear the canvas."""
         self.canvas.delete('all')
-        self.image = Image.new('L', (280, 280), 'white')
+        self.image = Image.new('L', (CANVAS_SIZE, CANVAS_SIZE), 'white')
         self.draw = ImageDraw.Draw(self.image)
         self.result_label.config(
             text="Draw a digit and click Predict",
             fg='blue'
         )
-    
+
+    def _shift_to_center_of_mass(self, img_array):
+        """Shift the digit so its center of mass sits near the image center."""
+        coords = np.indices(img_array.shape)
+        total_weight = img_array.sum()
+        if total_weight <= 0:
+            return img_array
+
+        center_y = float((coords[0] * img_array).sum() / total_weight)
+        center_x = float((coords[1] * img_array).sum() / total_weight)
+
+        shift_y = int(round((MNIST_IMAGE_SIZE - 1) / 2 - center_y))
+        shift_x = int(round((MNIST_IMAGE_SIZE - 1) / 2 - center_x))
+
+        centered = np.zeros_like(img_array)
+
+        src_y_start = max(0, -shift_y)
+        src_y_end = min(MNIST_IMAGE_SIZE, MNIST_IMAGE_SIZE - shift_y)
+        dst_y_start = max(0, shift_y)
+        dst_y_end = min(MNIST_IMAGE_SIZE, MNIST_IMAGE_SIZE + shift_y)
+
+        src_x_start = max(0, -shift_x)
+        src_x_end = min(MNIST_IMAGE_SIZE, MNIST_IMAGE_SIZE - shift_x)
+        dst_x_start = max(0, shift_x)
+        dst_x_end = min(MNIST_IMAGE_SIZE, MNIST_IMAGE_SIZE + shift_x)
+
+        centered[dst_y_start:dst_y_end, dst_x_start:dst_x_end] = img_array[
+            src_y_start:src_y_end, src_x_start:src_x_end
+        ]
+        return centered
+
     def preprocess_image(self):
-        """Convert drawn image to MNIST format (28x28, inverted)."""
-        # Resize to 28x28
-        img_resized = self.image.resize((28, 28), Image.Resampling.LANCZOS)
-        
-        # Convert to numpy array
-        img_array = np.array(img_resized)
-        
-        # Invert (MNIST has white digits on black background)
-        img_array = 255 - img_array
-        
-        # Normalize to [0, 1]
-        img_array = img_array / 255.0
+        """Convert the drawing into a more MNIST-like 28x28 grayscale image."""
+        # Work at the original drawing resolution first so we do not lose stroke details
+        # before cropping and centering the digit.
+        img_array = 1.0 - (np.array(self.image, dtype=np.float32) / 255.0)
+        coords = np.argwhere(img_array > DRAW_THRESHOLD)
 
-        #Center digit
-        coords = np.argwhere(img_array > 0.2)
-        if coords.size > 0:
-            y_min, x_min = coords.min(axis=0)
-            y_max, x_max = coords.max(axis=0)
+        if coords.size == 0:
+            blank = np.zeros((MNIST_IMAGE_SIZE, MNIST_IMAGE_SIZE), dtype=np.float32)
+            return blank.reshape(MNIST_IMAGE_SIZE * MNIST_IMAGE_SIZE, 1), blank
 
-            digit = img_array[y_min:y_max + 1, x_min:x_max + 1]
+        y_min, x_min = coords.min(axis=0)
+        y_max, x_max = coords.max(axis=0)
 
-            # Place in center
-            new_img = np.zeros((28, 28))
-            h, w = digit.shape
+        # Pad the crop a little so drawn strokes keep some breathing room after scaling.
+        pad = 20
+        y_min = max(0, y_min - pad)
+        x_min = max(0, x_min - pad)
+        y_max = min(img_array.shape[0] - 1, y_max + pad)
+        x_max = min(img_array.shape[1] - 1, x_max + pad)
 
-            y_offset = (28 - h) // 2
-            x_offset = (28 - w) // 2
+        cropped = self.image.crop((x_min, y_min, x_max + 1, y_max + 1))
+        cropped = cropped.filter(ImageFilter.GaussianBlur(radius=0.6))
 
-            new_img[y_offset:y_offset + h, x_offset:x_offset + w] = digit
-            img_array = new_img
+        width, height = cropped.size
+        scale = TARGET_DIGIT_SIZE / max(width, height)
+        resized_width = max(1, int(round(width * scale)))
+        resized_height = max(1, int(round(height * scale)))
+        resized = cropped.resize((resized_width, resized_height), Image.Resampling.LANCZOS)
 
-        # Reshape to (784, 1) for network
-        img_vector = img_array.reshape(784, 1)
-        
+        # Place the resized digit into the middle of a 28x28 canvas, which mirrors the
+        # layout used by MNIST much better than a direct full-frame resize.
+        mnist_canvas = Image.new('L', (MNIST_IMAGE_SIZE, MNIST_IMAGE_SIZE), 'white')
+        offset_x = (MNIST_IMAGE_SIZE - resized_width) // 2
+        offset_y = (MNIST_IMAGE_SIZE - resized_height) // 2
+        mnist_canvas.paste(resized, (offset_x, offset_y))
+
+        processed = 1.0 - (np.array(mnist_canvas, dtype=np.float32) / 255.0)
+        processed[processed < 0.05] = 0.0
+        processed = np.clip(processed * 1.15, 0.0, 1.0)
+        processed = self._shift_to_center_of_mass(processed)
+
+        # Reshape to (784, 1) for the network.
+        img_vector = processed.reshape(MNIST_IMAGE_SIZE * MNIST_IMAGE_SIZE, 1)
+
+        img_array = processed.reshape(MNIST_IMAGE_SIZE, MNIST_IMAGE_SIZE)
         return img_vector, img_array.reshape(28, 28)
     
     def predict(self):
@@ -176,11 +223,17 @@ class DigitDrawer:
         output = self.net.feedforward(input_vector)
         prediction = np.argmax(output)
         confidence = output[prediction][0] * 100
-        
+
+        confidence_note = ""
+        label_color = 'green'
+        if confidence < LOW_CONFIDENCE_THRESHOLD:
+            confidence_note = " - low confidence, try drawing it larger/cleaner"
+            label_color = 'dark orange'
+
         # Update label
         self.result_label.config(
-            text=f"Prediction: {prediction} (Confidence: {confidence:.1f}%)",
-            fg='green'
+            text=f"Prediction: {prediction} (Confidence: {confidence:.1f}%){confidence_note}",
+            fg=label_color
         )
         
         # Show what the network sees
@@ -233,6 +286,22 @@ class DigitDrawer:
         self.window.mainloop()
 
 
+def choose_default_network_file():
+    """Return the strongest saved model available in the project."""
+    candidates = [
+        "trained_network_improved.pkl",
+        "test_network1",
+        "trained_network.pkl",
+        "trained_network_30.pkl",
+    ]
+
+    for filename in candidates:
+        if os.path.exists(filename):
+            return filename
+
+    return "trained_network.pkl"
+
+
 def train_or_load_network():
     print("\n" + "=" * 60)
     print("Neural Network Setup")
@@ -244,9 +313,10 @@ def train_or_load_network():
     choice = input("\nChoice (1/2): ").strip()
 
     if choice == '1':
-        filename = input("Enter filename (default: trained_network.pkl): ").strip()
+        default_filename = choose_default_network_file()
+        filename = input(f"Enter filename (default: {default_filename}): ").strip()
         if not filename:
-            filename = "trained_network.pkl"
+            filename = default_filename
 
         try:
             net = save_load_network.load_network(filename)
@@ -259,22 +329,38 @@ def train_or_load_network():
     print("\nLoading MNIST data...")
     training_data, validation_data, test_data = mnist_loader.load_data_wrapper()
 
-    epochs = int(input("Enter number of epochs (e.g. 10-30): "))
+    epoch_input = input("Enter number of epochs (default: 12): ").strip()
+    epochs = int(epoch_input) if epoch_input else 12
 
-    print("Creating neural network [784, 128, 10]...")
-    net = network.Network([784, 128, 10])
+    # This remains a fully connected network, but it is kept compact enough to
+    # train in a reasonable time with this handwritten NumPy implementation.
+    print("Creating neural network [784, 128, 64, 10] with ReLU hidden layers...")
+    net = network.Network(
+        [784, 128, 64, 10],
+        hidden_activation="relu",
+        output_activation="sigmoid",
+        cost="cross_entropy",
+    )
 
     print(f"\nTraining for {epochs} epochs...")
     print("-" * 60)
-    net.SGD(training_data, epochs, 10, 1.0, test_data=test_data)
+    net.SGD(
+        training_data,
+        epochs,
+        20,
+        0.2,
+        test_data=test_data,
+        validation_data=validation_data,
+        lmbda=0.0001,
+    )
     print("-" * 60)
 
     # Save after training
     save_choice = input("\nSave this network? (y/n): ").strip().lower()
     if save_choice == 'y':
-        filename = input("Filename (default: trained_network.pkl): ").strip()
+        filename = input("Filename (default: trained_network_improved.pkl): ").strip()
         if not filename:
-            filename = "trained_network.pkl"
+            filename = "trained_network_improved.pkl"
         save_load_network.save_network(net, filename)
 
     return net
