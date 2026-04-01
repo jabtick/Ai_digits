@@ -97,6 +97,8 @@ class Network(object):
         test_data=None,
         lmbda=0.0,
         validation_data=None,
+
+
     ):
         """Train the network using mini-batch stochastic gradient descent.
 
@@ -109,6 +111,11 @@ class Network(object):
             lmbda: L2 weight decay strength
             validation_data: Optional validation set for additional monitoring
         """
+        best_weights = None
+        best_biases = None
+        best_validation_correct = -1
+        best_epoch = None
+
         training_data = list(training_data)
         n = len(training_data)
 
@@ -132,6 +139,11 @@ class Network(object):
             message = f"Epoch {j}"
             if validation_data:
                 validation_correct = self.evaluate(validation_data)
+                if validation_correct > best_validation_correct:
+                    best_validation_correct = validation_correct
+                    best_epoch = j
+                    best_weights = [w.copy() for w in self.weights]
+                    best_biases = [b.copy() for b in self.biases]
                 validation_pct = 100.0 * validation_correct / n_validation
                 message += f" | validation: {validation_correct} / {n_validation} ({validation_pct:.2f}%)"
             if test_data:
@@ -141,6 +153,12 @@ class Network(object):
             if not validation_data and not test_data:
                 message += " complete"
             print(message)
+        return {
+            "best_epoch": best_epoch,
+            "best_validation_correct": best_validation_correct,
+            "best_weights": best_weights,
+            "best_biases": best_biases,
+        }
 
     def update_mini_batch(self, mini_batch, eta, lmbda, training_size):
         """Update weights and biases using one mini-batch.

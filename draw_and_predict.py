@@ -344,7 +344,7 @@ def train_or_load_network():
 
     print(f"\nTraining for {epochs} epochs...")
     print("-" * 60)
-    net.SGD(
+    summary = net.SGD(
         training_data,
         epochs,
         20,
@@ -355,9 +355,26 @@ def train_or_load_network():
     )
     print("-" * 60)
 
+    if summary["best_epoch"] is not None:
+        best_validation_pct = 100.0 * summary["best_validation_correct"] / len(validation_data)
+        print(
+            f"Best validation checkpoint: epoch {summary['best_epoch']} "
+            f"({summary['best_validation_correct']} / {len(validation_data)} = {best_validation_pct:.2f}%)"
+        )
+
     # Save after training
     save_choice = input("\nSave this network? (y/n): ").strip().lower()
     if save_choice == 'y':
+        save_mode = "f"
+        if summary["best_weights"] is not None:
+            save_mode = input("Save best checkpoint or final model? (b/f, default: b): ").strip().lower()
+            if not save_mode:
+                save_mode = "b"
+
+        if save_mode == "b" and summary["best_weights"] is not None:
+            net.weights = [w.copy() for w in summary["best_weights"]]
+            net.biases = [b.copy() for b in summary["best_biases"]]
+
         filename = input("Filename (default: trained_network_improved.pkl): ").strip()
         if not filename:
             filename = "trained_network_improved.pkl"
