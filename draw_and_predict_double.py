@@ -1,29 +1,32 @@
 """
-draw_and_predict.py
-~~~~~~~~~~~~~~~~~~~
+draw_and_predict_double.py
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Draw your own digit and test it with the trained neural network!
+Draw a two-digit number and test it with the trained neural network.
 
 Usage:
-    python draw_and_predict.py
+    python draw_and_predict_double.py
 
 This will:
 1. Train a neural network (or load a saved one)
-2. Open a drawing window
-3. Let you draw a digit
-4. Show the network's prediction
+2. Open a drawing window split into two drawing zones
+3. Let you draw one digit on each side
+4. Show the combined two-digit prediction
 """
 
-import numpy as np
-import matplotlib.pyplot as plt
-import tkinter as tk
-from PIL import Image, ImageDraw, ImageFilter
 import os
-import network
+import tkinter as tk
+
+import matplotlib.pyplot as plt
+import numpy as np
+from PIL import Image, ImageDraw, ImageFilter
+
 import mnist_loader
+import network
 import save_load_network
 
 CANVAS_SIZE = 280
+DOUBLE_CANVAS_WIDTH = CANVAS_SIZE * 2
 MNIST_IMAGE_SIZE = 28
 TARGET_DIGIT_SIZE = 20
 DRAW_THRESHOLD = 0.10
@@ -34,90 +37,118 @@ class DigitDrawer:
     def __init__(self, net):
         self.net = net
         self.window = tk.Tk()
-        self.window.title("Draw a Digit (0-9)")
+        self.window.title("Draw a Two-Digit Number (00-99)")
 
-        # Create canvas for drawing
-        self.canvas_width = CANVAS_SIZE
+        # Create a wider canvas so each digit has its own drawing region.
+        self.canvas_width = DOUBLE_CANVAS_WIDTH
         self.canvas_height = CANVAS_SIZE
         self.canvas = tk.Canvas(
             self.window,
             width=self.canvas_width,
             height=self.canvas_height,
-            bg='white',
-            cursor='cross'
+            bg="white",
+            cursor="cross",
         )
         self.canvas.pack()
 
-        # Create image for drawing
-        self.image = Image.new('L', (CANVAS_SIZE, CANVAS_SIZE), 'white')
+        # Store the drawn strokes in a grayscale image that matches the canvas size.
+        self.image = Image.new("L", (self.canvas_width, self.canvas_height), "white")
         self.draw = ImageDraw.Draw(self.image)
 
-        # Bind mouse events
-        self.canvas.bind('<B1-Motion>', self.paint)
-        self.canvas.bind('<ButtonRelease-1>', self.reset_coords)
+        self._draw_divider()
+
+        # Bind mouse events.
+        self.canvas.bind("<B1-Motion>", self.paint)
+        self.canvas.bind("<ButtonRelease-1>", self.reset_coords)
         self.old_x = None
         self.old_y = None
 
-        # Buttons frame
         button_frame = tk.Frame(self.window)
         button_frame.pack()
 
-        # Predict button
         predict_btn = tk.Button(
             button_frame,
             text="Predict",
             command=self.predict,
-            bg='green',
-            fg='white',
-            font=('Arial', 14, 'bold'),
-            padx=20
+            bg="green",
+            fg="white",
+            font=("Arial", 14, "bold"),
+            padx=20,
         )
         predict_btn.pack(side=tk.LEFT, padx=5, pady=10)
 
-        # Clear button
         clear_btn = tk.Button(
             button_frame,
             text="Clear",
             command=self.clear,
-            bg='red',
-            fg='white',
-            font=('Arial', 14, 'bold'),
-            padx=20
+            bg="red",
+            fg="white",
+            font=("Arial", 14, "bold"),
+            padx=20,
         )
         clear_btn.pack(side=tk.LEFT, padx=5, pady=10)
 
-        # Prediction label
         self.result_label = tk.Label(
             self.window,
-            text="Draw a digit and click Predict",
-            font=('Arial', 16, 'bold'),
-            fg='blue'
+            text="Draw two digits and click Predict",
+            font=("Arial", 16, "bold"),
+            fg="blue",
         )
         self.result_label.pack(pady=10)
 
-        # Instructions
         instructions = tk.Label(
             self.window,
-            text="Draw with mouse. Try to center the digit and make it large.",
-            font=('Arial', 10),
-            fg='gray'
+            text="Draw one digit on the left and one digit on the right.",
+            font=("Arial", 10),
+            fg="gray",
         )
         instructions.pack()
+
+    def _draw_divider(self):
+        """Draw the visual guide that splits the board into two halves."""
+        divider_x = CANVAS_SIZE
+        self.canvas.create_line(
+            divider_x,
+            0,
+            divider_x,
+            self.canvas_height,
+            fill="gray",
+            width=3,
+            dash=(8, 6),
+        )
+        self.canvas.create_text(
+            CANVAS_SIZE // 2,
+            20,
+            text="Left digit",
+            fill="gray",
+            font=("Arial", 11, "bold"),
+        )
+        self.canvas.create_text(
+            CANVAS_SIZE + (CANVAS_SIZE // 2),
+            20,
+            text="Right digit",
+            fill="gray",
+            font=("Arial", 11, "bold"),
+        )
 
     def paint(self, event):
         """Draw on canvas."""
         paint_width = 20
         if self.old_x and self.old_y:
-            # Draw on canvas
             self.canvas.create_line(
-                self.old_x, self.old_y, event.x, event.y,
-                width=paint_width, fill='black',
-                capstyle=tk.ROUND, smooth=tk.TRUE
+                self.old_x,
+                self.old_y,
+                event.x,
+                event.y,
+                width=paint_width,
+                fill="black",
+                capstyle=tk.ROUND,
+                smooth=tk.TRUE,
             )
-            # Draw on image
             self.draw.line(
                 [self.old_x, self.old_y, event.x, event.y],
-                fill='black', width=paint_width
+                fill="black",
+                width=paint_width,
             )
         self.old_x = event.x
         self.old_y = event.y
@@ -128,13 +159,14 @@ class DigitDrawer:
         self.old_y = None
 
     def clear(self):
-        """Clear the canvas."""
-        self.canvas.delete('all')
-        self.image = Image.new('L', (CANVAS_SIZE, CANVAS_SIZE), 'white')
+        """Clear the canvas and redraw the divider."""
+        self.canvas.delete("all")
+        self.image = Image.new("L", (self.canvas_width, self.canvas_height), "white")
         self.draw = ImageDraw.Draw(self.image)
+        self._draw_divider()
         self.result_label.config(
-            text="Draw a digit and click Predict",
-            fg='blue'
+            text="Draw two digits and click Predict",
+            fg="blue",
         )
 
     def _shift_to_center_of_mass(self, img_array):
@@ -167,11 +199,9 @@ class DigitDrawer:
         ]
         return centered
 
-    def preprocess_image(self):
-        """Convert the drawing into a more MNIST-like 28x28 grayscale image."""
-        # Work at the original drawing resolution first so we do not lose stroke details
-        # before cropping and centering the digit.
-        img_array = 1.0 - (np.array(self.image, dtype=np.float32) / 255.0)
+    def _preprocess_single_digit(self, digit_image):
+        """Convert one half of the board into a MNIST-like 28x28 image."""
+        img_array = 1.0 - (np.array(digit_image, dtype=np.float32) / 255.0)
         coords = np.argwhere(img_array > DRAW_THRESHOLD)
 
         if coords.size == 0:
@@ -181,14 +211,13 @@ class DigitDrawer:
         y_min, x_min = coords.min(axis=0)
         y_max, x_max = coords.max(axis=0)
 
-        # Pad the crop a little so drawn strokes keep some breathing room after scaling.
         pad = 20
         y_min = max(0, y_min - pad)
         x_min = max(0, x_min - pad)
         y_max = min(img_array.shape[0] - 1, y_max + pad)
         x_max = min(img_array.shape[1] - 1, x_max + pad)
 
-        cropped = self.image.crop((x_min, y_min, x_max + 1, y_max + 1))
+        cropped = digit_image.crop((x_min, y_min, x_max + 1, y_max + 1))
         cropped = cropped.filter(ImageFilter.GaussianBlur(radius=0.6))
 
         width, height = cropped.size
@@ -197,9 +226,7 @@ class DigitDrawer:
         resized_height = max(1, int(round(height * scale)))
         resized = cropped.resize((resized_width, resized_height), Image.Resampling.LANCZOS)
 
-        # Place the resized digit into the middle of a 28x28 canvas, which mirrors the
-        # layout used by MNIST much better than a direct full-frame resize.
-        mnist_canvas = Image.new('L', (MNIST_IMAGE_SIZE, MNIST_IMAGE_SIZE), 'white')
+        mnist_canvas = Image.new("L", (MNIST_IMAGE_SIZE, MNIST_IMAGE_SIZE), "white")
         offset_x = (MNIST_IMAGE_SIZE - resized_width) // 2
         offset_y = (MNIST_IMAGE_SIZE - resized_height) // 2
         mnist_canvas.paste(resized, (offset_x, offset_y))
@@ -209,76 +236,99 @@ class DigitDrawer:
         processed = np.clip(processed * 1.15, 0.0, 1.0)
         processed = self._shift_to_center_of_mass(processed)
 
-        # Reshape to (784, 1) for the network.
         img_vector = processed.reshape(MNIST_IMAGE_SIZE * MNIST_IMAGE_SIZE, 1)
+        return img_vector, processed.reshape(MNIST_IMAGE_SIZE, MNIST_IMAGE_SIZE)
 
-        img_array = processed.reshape(MNIST_IMAGE_SIZE, MNIST_IMAGE_SIZE)
-        return img_vector, img_array.reshape(28, 28)
+    def preprocess_image(self):
+        """Split the board into left and right halves and preprocess both."""
+        left_image = self.image.crop((0, 0, CANVAS_SIZE, CANVAS_SIZE))
+        right_image = self.image.crop((CANVAS_SIZE, 0, DOUBLE_CANVAS_WIDTH, CANVAS_SIZE))
+
+        left_vector, left_processed = self._preprocess_single_digit(left_image)
+        right_vector, right_processed = self._preprocess_single_digit(right_image)
+        return (left_vector, left_processed), (right_vector, right_processed)
 
     def predict(self):
-        """Get network prediction for drawn digit."""
-        # Preprocess the image
-        input_vector, processed_image = self.preprocess_image()
+        """Predict the left and right digits with the same network and join them."""
+        (left_vector, left_processed), (right_vector, right_processed) = self.preprocess_image()
 
-        # Get network output
-        output = self.net.feedforward(input_vector)
-        prediction = np.argmax(output)
-        confidence = output[prediction][0] * 100
+        left_output = self.net.feedforward(left_vector)
+        right_output = self.net.feedforward(right_vector)
+
+        left_prediction = int(np.argmax(left_output))
+        right_prediction = int(np.argmax(right_output))
+
+        left_confidence = float(left_output[left_prediction][0] * 100)
+        right_confidence = float(right_output[right_prediction][0] * 100)
+        average_confidence = (left_confidence + right_confidence) / 2.0
+
+        combined_prediction = f"{left_prediction}{right_prediction}"
 
         confidence_note = ""
-        label_color = 'green'
-        if confidence < LOW_CONFIDENCE_THRESHOLD:
-            confidence_note = " - low confidence, try drawing it larger/cleaner"
-            label_color = 'dark orange'
+        label_color = "green"
+        if average_confidence < LOW_CONFIDENCE_THRESHOLD:
+            confidence_note = " - low confidence, try drawing both digits larger/cleaner"
+            label_color = "dark orange"
 
-        # Update label
         self.result_label.config(
-            text=f"Prediction: {prediction} (Confidence: {confidence:.1f}%){confidence_note}",
-            fg=label_color
+            text=(
+                f"Prediction: {combined_prediction} "
+                f"(Confidence: {average_confidence:.1f}%){confidence_note}"
+            ),
+            fg=label_color,
         )
 
-        # Show what the network sees
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8, 4))
+        fig, axes = plt.subplots(1, 3, figsize=(12, 4))
 
-        # Original drawing
-        ax1.imshow(self.image, cmap='gray')
-        ax1.set_title('Your Drawing')
-        ax1.axis('off')
+        axes[0].imshow(self.image, cmap="gray")
+        axes[0].set_title("Your Drawing")
+        axes[0].axis("off")
 
-        # Processed (what network sees)
-        ax2.imshow(processed_image, cmap='gray')
-        ax2.set_title(f'Network Input (28x28)\nPrediction: {prediction}')
-        ax2.axis('off')
+        axes[1].imshow(left_processed, cmap="gray")
+        axes[1].set_title("Left Network Input (28x28)")
+        axes[1].axis("off")
+
+        axes[2].imshow(right_processed, cmap="gray")
+        axes[2].set_title("Right Network Input (28x28)")
+        axes[2].axis("off")
 
         plt.tight_layout()
         plt.show()
 
-        # Show all output activations
-        self.show_all_outputs(output)
+        self.show_all_outputs(left_output, right_output)
 
-    def show_all_outputs(self, output):
-        """Show the activation of all output neurons."""
-        fig, ax = plt.subplots(figsize=(10, 4))
-
+    def show_all_outputs(self, left_output, right_output):
+        """Show output activations for the left and right digit predictions."""
+        fig, axes = plt.subplots(1, 2, figsize=(12, 4), sharey=True)
         digits = range(10)
-        activations = [output[i][0] for i in digits]
 
-        colors = ['green' if act == max(activations) else 'blue' for act in activations]
-        bars = ax.bar(digits, activations, color=colors, alpha=0.7)
+        panels = [
+            (axes[0], left_output, "Left Digit Activations"),
+            (axes[1], right_output, "Right Digit Activations"),
+        ]
 
-        ax.set_xlabel('Digit', fontsize=12)
-        ax.set_ylabel('Activation', fontsize=12)
-        ax.set_title('Network Output Activations for Each Digit', fontsize=14)
-        ax.set_xticks(digits)
-        ax.grid(axis='y', alpha=0.3)
+        for ax, output, title in panels:
+            activations = [output[i][0] for i in digits]
+            colors = ["green" if act == max(activations) else "blue" for act in activations]
+            bars = ax.bar(digits, activations, color=colors, alpha=0.7)
 
-        # Add value labels on bars
-        for bar, act in zip(bars, activations):
-            height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width() / 2., height,
-                    f'{act:.3f}',
-                    ha='center', va='bottom', fontsize=9)
+            ax.set_xlabel("Digit", fontsize=12)
+            ax.set_title(title, fontsize=14)
+            ax.set_xticks(list(digits))
+            ax.grid(axis="y", alpha=0.3)
 
+            for bar, act in zip(bars, activations):
+                height = bar.get_height()
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2.0,
+                    height,
+                    f"{act:.3f}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=9,
+                )
+
+        axes[0].set_ylabel("Activation", fontsize=12)
         plt.tight_layout()
         plt.show()
 
@@ -313,7 +363,7 @@ def train_or_load_network():
 
     choice = input("\nChoice (1/2): ").strip()
 
-    if choice == '1':
+    if choice == "1":
         default_filename = choose_default_network_file()
         filename = input(f"Enter filename (default: {default_filename}): ").strip()
         if not filename:
@@ -321,20 +371,16 @@ def train_or_load_network():
 
         try:
             net = save_load_network.load_network(filename)
-
             return net
         except FileNotFoundError:
             print("No saved network found. Training a new one instead...\n")
 
-    # Train new network
     print("\nLoading MNIST data...")
     training_data, validation_data, test_data = mnist_loader.load_data_wrapper()
 
     epoch_input = input("Enter number of epochs (default: 12): ").strip()
     epochs = int(epoch_input) if epoch_input else 12
 
-    # This remains a fully connected network, but it is kept compact enough to
-    # train in a reasonable time with this handwritten NumPy implementation.
     print("Creating neural network [784, 128, 64, 10] with ReLU hidden layers...")
     net = network.Network(
         [784, 128, 64, 10],
@@ -363,9 +409,8 @@ def train_or_load_network():
             f"({summary['best_validation_correct']} / {len(validation_data)} = {best_validation_pct:.2f}%)"
         )
 
-    # Save after training
     save_choice = input("\nSave this network? (y/n): ").strip().lower()
-    if save_choice == 'y':
+    if save_choice == "y":
         save_mode = "f"
         if summary["best_weights"] is not None:
             save_mode = input("Save best checkpoint or final model? (b/f, default: b): ").strip().lower()
@@ -386,30 +431,28 @@ def train_or_load_network():
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("Draw Your Own Digit - Neural Network Tester")
+    print("Draw Your Own Two-Digit Number - Neural Network Tester")
     print("=" * 60)
 
     try:
-        # Train or load network
         net = train_or_load_network()
 
-        print("\n✓ Network ready!")
+        print("\nNetwork ready!")
         print("\nOpening drawing window...")
         print("Instructions:")
-        print("  - Draw a digit (0-9) with your mouse")
-        print("  - Try to make it large and centered")
-        print("  - Click 'Predict' to see what the network thinks")
+        print("  - Draw the left digit in the left half")
+        print("  - Draw the right digit in the right half")
+        print("  - Click 'Predict' to see the combined two-digit guess")
         print("  - Click 'Clear' to draw again")
         print("\n" + "=" * 60)
 
-        # Start drawing interface
         app = DigitDrawer(net)
         app.run()
 
     except KeyboardInterrupt:
         print("\n\nExiting...")
     except Exception as e:
-        print(f"\n✗ Error: {e}")
+        print(f"\nError: {e}")
         import traceback
 
         traceback.print_exc()
