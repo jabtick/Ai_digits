@@ -31,6 +31,10 @@ MNIST_IMAGE_SIZE = 28
 TARGET_DIGIT_SIZE = 20
 DRAW_THRESHOLD = 0.10
 LOW_CONFIDENCE_THRESHOLD = 75.0
+EMPTY_SIDE_THRESHOLD = 0.01
+MIN_REGION_WIDTH = 8
+MIN_GAP_WIDTH = 12
+DOUBLE_DIGIT_WIDTH_RATIO = 1.35
 
 
 class DigitDrawer:
@@ -54,8 +58,6 @@ class DigitDrawer:
         # Store the drawn strokes in a grayscale image that matches the canvas size.
         self.image = Image.new("L", (self.canvas_width, self.canvas_height), "white")
         self.draw = ImageDraw.Draw(self.image)
-
-        self._draw_divider()
 
         # Bind mouse events.
         self.canvas.bind("<B1-Motion>", self.paint)
@@ -98,38 +100,11 @@ class DigitDrawer:
 
         instructions = tk.Label(
             self.window,
-            text="Draw one digit on the left and one digit on the right.",
+            text="Draw a two-digit number. The app will center it before predicting.",
             font=("Arial", 10),
             fg="gray",
         )
         instructions.pack()
-
-    def _draw_divider(self):
-        """Draw the visual guide that splits the board into two halves."""
-        divider_x = CANVAS_SIZE
-        self.canvas.create_line(
-            divider_x,
-            0,
-            divider_x,
-            self.canvas_height,
-            fill="gray",
-            width=3,
-            dash=(8, 6),
-        )
-        self.canvas.create_text(
-            CANVAS_SIZE // 2,
-            20,
-            text="Left digit",
-            fill="gray",
-            font=("Arial", 11, "bold"),
-        )
-        self.canvas.create_text(
-            CANVAS_SIZE + (CANVAS_SIZE // 2),
-            20,
-            text="Right digit",
-            fill="gray",
-            font=("Arial", 11, "bold"),
-        )
 
     def paint(self, event):
         """Draw on canvas."""
@@ -159,11 +134,10 @@ class DigitDrawer:
         self.old_y = None
 
     def clear(self):
-        """Clear the canvas and redraw the divider."""
+        """Clear the canvas."""
         self.canvas.delete("all")
         self.image = Image.new("L", (self.canvas_width, self.canvas_height), "white")
         self.draw = ImageDraw.Draw(self.image)
-        self._draw_divider()
         self.result_label.config(
             text="Draw two digits and click Predict",
             fg="blue",
@@ -239,18 +213,189 @@ class DigitDrawer:
         img_vector = processed.reshape(MNIST_IMAGE_SIZE * MNIST_IMAGE_SIZE, 1)
         return img_vector, processed.reshape(MNIST_IMAGE_SIZE, MNIST_IMAGE_SIZE)
 
+    def _has_visible_digit(self, processed_image):
+        """Return True when a processed half contains enough ink to count as a digit."""
+        return float(np.sum(processed_image)) > EMPTY_SIDE_THRESHOLD
+
+    def _find_active_regions(self, active_columns):
+        """Return contiguous column regions that contain meaningful ink."""
+        regions = []
+        start = None
+
+        for idx, is_active in enumerate(active_columns):
+            if is_active and start is None:
+                start = idx
+            elif not is_active and start is not None:
+                if idx - start >= MIN_REGION_WIDTH:
+                    regions.append((start, idx - 1))
+                start = None
+
+        if start is not None and len(active_columns) - start >= MIN_REGION_WIDTH:
+            regions.append((start, len(active_columns) - 1))
+
+        return regions
+
+    def _analyze_layout(self):
+        """Decide whether the raw drawing looks like one digit or two digits."""
+        img_array = 1.0 - (np.array(self.image, dtype=np.float32) / 255.0)
+        coords = np.argwhere(img_array > DRAW_THRESHOLD)
+
+        if coords.size == 0:
+            return {"mode": "empty"}
+
+        y_min, x_min = coords.min(axis=0)
+        y_max, x_max = coords.max(axis=0)
+
+        bounding_width = x_max - x_min + 1
+        bounding_height = y_max - y_min + 1
+        width_ratio = bounding_width / max(1, bounding_height)
+
+        column_sums = img_array.sum(axis=0)
+        active_columns = column_sums > 1.0
+        regions = self._find_active_regions(active_columns)
+
+        if len(regions) >= 2:
+            first_region = regions[0]
+            last_region = regions[-1]
+            gap_width = last_region[0] - first_region[1] - 1
+            if gap_width >= MIN_GAP_WIDTH:
+                return {
+                    "mode": "double",
+                    "bbox": (x_min, y_min, x_max, y_max),
+                }
+
+        if width_ratio >= DOUBLE_DIGIT_WIDTH_RATIO:
+            return {
+                "mode": "double",
+                "bbox": (x_min, y_min, x_max, y_max),
+            }
+
+        return {
+            "mode": "single",
+            "bbox": (x_min, y_min, x_max, y_max),
+        }
+
+    def _center_full_drawing(self):
+        """Center the entire two-digit drawing on a backend copy of the canvas."""
+        img_array = 1.0 - (np.array(self.image, dtype=np.float32) / 255.0)
+        coords = np.argwhere(img_array > DRAW_THRESHOLD)
+
+        if coords.size == 0:
+            return self.image.copy()
+
+        y_min, x_min = coords.min(axis=0)
+        y_max, x_max = coords.max(axis=0)
+
+        drawing_width = x_max - x_min + 1
+        drawing_height = y_max - y_min + 1
+
+        current_center_x = x_min + drawing_width / 2.0
+        current_center_y = y_min + drawing_height / 2.0
+
+        target_center_x = self.canvas_width / 2.0
+        target_center_y = self.canvas_height / 2.0
+
+        shift_x = int(round(target_center_x - current_center_x))
+        shift_y = int(round(target_center_y - current_center_y))
+
+        centered_image = Image.new("L", (self.canvas_width, self.canvas_height), "white")
+        paste_x = x_min + shift_x
+        paste_y = y_min + shift_y
+        cropped = self.image.crop((x_min, y_min, x_max + 1, y_max + 1))
+        centered_image.paste(cropped, (paste_x, paste_y))
+        return centered_image
+
+    def _center_single_digit(self, bbox):
+        """Center one digit on a square backend canvas for single-digit prediction."""
+        x_min, y_min, x_max, y_max = bbox
+        centered_image = Image.new("L", (CANVAS_SIZE, CANVAS_SIZE), "white")
+
+        digit_width = x_max - x_min + 1
+        digit_height = y_max - y_min + 1
+        cropped = self.image.crop((x_min, y_min, x_max + 1, y_max + 1))
+
+        paste_x = int(round((CANVAS_SIZE - digit_width) / 2.0))
+        paste_y = int(round((CANVAS_SIZE - digit_height) / 2.0))
+        centered_image.paste(cropped, (paste_x, paste_y))
+        return centered_image
+
     def preprocess_image(self):
-        """Split the board into left and right halves and preprocess both."""
-        left_image = self.image.crop((0, 0, CANVAS_SIZE, CANVAS_SIZE))
-        right_image = self.image.crop((CANVAS_SIZE, 0, DOUBLE_CANVAS_WIDTH, CANVAS_SIZE))
+        """Choose a single-digit or double-digit backend path before preprocessing."""
+        layout = self._analyze_layout()
+
+        if layout["mode"] == "empty":
+            return {"mode": "empty"}
+
+        if layout["mode"] == "single":
+            centered_single = self._center_single_digit(layout["bbox"])
+            single_vector, single_processed = self._preprocess_single_digit(centered_single)
+            return {
+                "mode": "single",
+                "centered_image": centered_single,
+                "vector": single_vector,
+                "processed": single_processed,
+            }
+
+        centered_image = self._center_full_drawing()
+        left_image = centered_image.crop((0, 0, CANVAS_SIZE, CANVAS_SIZE))
+        right_image = centered_image.crop((CANVAS_SIZE, 0, DOUBLE_CANVAS_WIDTH, CANVAS_SIZE))
 
         left_vector, left_processed = self._preprocess_single_digit(left_image)
         right_vector, right_processed = self._preprocess_single_digit(right_image)
-        return (left_vector, left_processed), (right_vector, right_processed)
+        return {
+            "mode": "double",
+            "centered_image": centered_image,
+            "left": (left_vector, left_processed),
+            "right": (right_vector, right_processed),
+        }
 
     def predict(self):
         """Predict the left and right digits with the same network and join them."""
-        (left_vector, left_processed), (right_vector, right_processed) = self.preprocess_image()
+        preprocessing = self.preprocess_image()
+
+        if preprocessing["mode"] == "empty":
+            self.result_label.config(
+                text="Draw at least one digit and click Predict",
+                fg="dark orange",
+            )
+            return
+
+        if preprocessing["mode"] == "single":
+            centered_image = preprocessing["centered_image"]
+            processed_image = preprocessing["processed"]
+            output = self.net.feedforward(preprocessing["vector"])
+            prediction = int(np.argmax(output))
+            confidence = float(output[prediction][0] * 100)
+
+            confidence_note = ""
+            label_color = "green"
+            if confidence < LOW_CONFIDENCE_THRESHOLD:
+                confidence_note = " - low confidence, try drawing it larger/cleaner"
+                label_color = "dark orange"
+
+            self.result_label.config(
+                text=f"Prediction: {prediction} (Confidence: {confidence:.1f}%){confidence_note}",
+                fg=label_color,
+            )
+
+            fig, axes = plt.subplots(1, 2, figsize=(8, 4))
+            axes[0].imshow(centered_image, cmap="gray")
+            axes[0].set_title("Centered Backend Drawing")
+            axes[0].axis("off")
+
+            axes[1].imshow(processed_image, cmap="gray")
+            axes[1].set_title("Single Network Input (28x28)")
+            axes[1].axis("off")
+
+            plt.tight_layout()
+            plt.show()
+
+            self.show_all_outputs(output, None)
+            return
+
+        centered_image = preprocessing["centered_image"]
+        left_vector, left_processed = preprocessing["left"]
+        right_vector, right_processed = preprocessing["right"]
 
         left_output = self.net.feedforward(left_vector)
         right_output = self.net.feedforward(right_vector)
@@ -262,26 +407,43 @@ class DigitDrawer:
         right_confidence = float(right_output[right_prediction][0] * 100)
         average_confidence = (left_confidence + right_confidence) / 2.0
 
-        combined_prediction = f"{left_prediction}{right_prediction}"
+        left_has_digit = self._has_visible_digit(left_processed)
+        right_has_digit = self._has_visible_digit(right_processed)
+
+        if left_has_digit and right_has_digit:
+            combined_prediction = f"{left_prediction}{right_prediction}"
+            display_confidence = average_confidence
+        elif left_has_digit:
+            combined_prediction = f"{left_prediction}"
+            display_confidence = left_confidence
+        elif right_has_digit:
+            combined_prediction = f"{right_prediction}"
+            display_confidence = right_confidence
+        else:
+            self.result_label.config(
+                text="Draw at least one digit and click Predict",
+                fg="dark orange",
+            )
+            return
 
         confidence_note = ""
         label_color = "green"
-        if average_confidence < LOW_CONFIDENCE_THRESHOLD:
+        if display_confidence < LOW_CONFIDENCE_THRESHOLD:
             confidence_note = " - low confidence, try drawing both digits larger/cleaner"
             label_color = "dark orange"
 
         self.result_label.config(
             text=(
                 f"Prediction: {combined_prediction} "
-                f"(Confidence: {average_confidence:.1f}%){confidence_note}"
+                f"(Confidence: {display_confidence:.1f}%){confidence_note}"
             ),
             fg=label_color,
         )
 
         fig, axes = plt.subplots(1, 3, figsize=(12, 4))
 
-        axes[0].imshow(self.image, cmap="gray")
-        axes[0].set_title("Your Drawing")
+        axes[0].imshow(centered_image, cmap="gray")
+        axes[0].set_title("Centered Backend Drawing")
         axes[0].axis("off")
 
         axes[1].imshow(left_processed, cmap="gray")
@@ -298,7 +460,35 @@ class DigitDrawer:
         self.show_all_outputs(left_output, right_output)
 
     def show_all_outputs(self, left_output, right_output):
-        """Show output activations for the left and right digit predictions."""
+        """Show output activations for one or two digit predictions."""
+        if right_output is None:
+            fig, ax = plt.subplots(1, 1, figsize=(6, 4))
+            digits = range(10)
+            activations = [left_output[i][0] for i in digits]
+            colors = ["green" if act == max(activations) else "blue" for act in activations]
+            bars = ax.bar(digits, activations, color=colors, alpha=0.7)
+
+            ax.set_xlabel("Digit", fontsize=12)
+            ax.set_ylabel("Activation", fontsize=12)
+            ax.set_title("Digit Activations", fontsize=14)
+            ax.set_xticks(list(digits))
+            ax.grid(axis="y", alpha=0.3)
+
+            for bar, act in zip(bars, activations):
+                height = bar.get_height()
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2.0,
+                    height,
+                    f"{act:.3f}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=9,
+                )
+
+            plt.tight_layout()
+            plt.show()
+            return
+
         fig, axes = plt.subplots(1, 2, figsize=(12, 4), sharey=True)
         digits = range(10)
 
